@@ -3,15 +3,15 @@ import collections
 import requests
 import re
 import logging
-import json
 
 from mysql import connector
 from sys import argv
 
 import easylogger
 import config
-
+logging.basicConfig(level=logging.ERROR)
 LOG = easylogger.EasyLogger(logging.getLogger(__name__))
+LOG.setLevel(logging.INFO)
 
 class SCPError(Exception):
     pass
@@ -116,24 +116,24 @@ class Database:
         Execute a query and return the full result set.
         '''
         query = query_string.format(**kwargs)
-        LOG.debug("Sending query to database: ", query)
+        #LOG.debug("Sending query to database: ", query)
         cursor.execute(query)
         res = cursor.fetchall()
-        LOG.debug("Got results: ", res)
+        #LOG.debug("Got results: ", res)
         return res
 
     def _dex(self, query_string, **kwargs):
         '''
         Query the main database.
         '''
-        LOG.debug("Querying docent")
+        #LOG.debug("Querying docent")
         return self._execute(self._dcur, query_string, **kwargs)
 
     def _mex(self, query_string, **kwargs):
         '''
         Query the media database.
         '''
-        LOG.debug("Querying docent_media")
+        #LOG.debug("Querying docent_media")
         return self._execute(self._mcur, query_string, **kwargs)
 
     def tour_to_sections_and_titles(self, tour_id):
@@ -194,7 +194,7 @@ class Database:
 
         media_ids = self._dex(ID_QUERY_FMT, page_id=page_id)
 
-        LOG.debug("got ids: ", media_ids)
+        #LOG.debug("got ids: ", media_ids)
 
 
         file_infos = []
@@ -202,7 +202,7 @@ class Database:
         for media_id in media_ids:
             file_infos.extend(self._mex(INFO_QUERY_FMT, media_id=media_id[0]))
 
-        LOG.debug("got infos: ", file_infos)
+        #LOG.debug("got infos: ", file_infos)
 
         return file_infos
 
@@ -333,8 +333,8 @@ class PageBuilder(DBBuilder):
 
         for file_type, file_name, file_path in media_infos:
             media_dir = self.BASE_MEDIA_DIR.format(file_path)
-            LOG.debug("file type: ", file_type)
-            LOG.debug("file type == image: ", file_type == "image")
+            #LOG.debug("file type: ", file_type)
+            #LOG.debug("file type == image: ", file_type == "image")
             if file_type == "image" and media_dir not in image_dirs:
                 arc_image_paths.add(self._process_logfile(file_path))
                 image_dirs.add(media_dir)
@@ -365,22 +365,24 @@ class Page(PrintableMixin):
         self.dictionary_words = []
         self.notes = []
 
-@easylogger.log_at(logging.INFO)
+@easylogger.log_at(new_level=logging.ERROR)
 def main(tour_id):
     db = Database()
     page_builder = PageBuilder(db)
     section_builder = SectionBuilder(db, page_builder)
 
     sections = section_builder.for_tour(tour_id)
-    # for section in sections:
-    #     for page in section.pages:
-    #         LOG.info("Page body: ", page.body)
-    #         LOG.info("Page image dirs:", page.image_dirs)
-    #         LOG.info("Page arc path: ", page.arc_image_paths)
-    #         LOG.info("Page questions: ", page.questions)
-    #         LOG.info("Page dictionary words: ", page.dictionary_words)
-    #         LOG.info("Page notes: ", page.notes)
-    print(sections)
+    for section in sections:
+        print("Section title: ", section.title)
+        print("Pages:")
+        for page in section.pages:
+            print("Page body: ", page.body)
+            print("Page image dirs:", page.image_dirs)
+            print("Page arc path: ", page.arc_image_paths)
+            print("Page questions: ", page.questions)
+            print("Page dictionary words: ", page.dictionary_words)
+            print("Page notes: ", page.notes)
+    # print(sections)
 
     return sections
 
