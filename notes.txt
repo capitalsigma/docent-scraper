@@ -1,0 +1,88 @@
+EXAMPLE DATA:
+empty n_media_id:
+	tour id = 98
+	section id = 511
+	page id = 1537
+
+nonempty n_media_d
+	page id = 1504
+	media id = 1007
+
+GENERAL NOTES:
+	it looks like db connections time out if you don't use them for a while, and return an OperationalError when they do
+
+"SELECT n_tour_section_id, s_section FROM t_tour_section t INNER JOIN t_section s ON t.n_section_id = s.n_section_id WHERE n_tour_id = {frm_tour_id} ORDER BY n_sequence", "docent"
+input:
+	a tour ID
+output:
+	a tuple containing a list of section IDs and section titles
+
+
+"SELECT n_section_page_id, x.n_tour_section_id FROM t_section_page s INNER JOIN t_page p ON s.n_page_id = p.n_page_id INNER  JOIN t_tour_section x ON s.n_tour_section_id = x.n_tour_section_id WHERE n_tour_id = {frm_tour_id} AND x.n_sequence = {set_count} ORDER BY s.n_sequence", "docent"
+input:
+	set_count: section id, SETID
+	frm_tour_id: tour id, TID
+output:
+	a tuple containing the setid that was input, plus a page id
+
+"SELECT s_text FROM t_text t INNER JOIN t_page_text p ON t.n_text_id = p.n_text_id WHERE n_section_page_id = {section_page_id}", "docent"
+input:
+	section_page_id, a section page ID
+output:
+	the page text
+
+"SELECT n_media_id FROM t_page_media WHERE n_section_page_id = {section_page_id} AND s_mode IS NULL", "docent"
+input:
+	section_page_id, a section page id
+output:
+	n_media_id, a media id
+
+NOTES:
+	this call is returning null on our example data
+	however, the php contains a check for this -- it does not run **any** of the image-selecting logic if this query comes back empty.
+	maybe this page is just empty? there are some results for LIKE "%Hubble%" in this db.
+
+"SELECT s_file, s_file_name, s_file_location FROM t_file f INNER JOIN t_file_subtype fs ON f.n_file_id = fs.n_file_id INNER JOIN t_media_subtype ms ON fs.n_file_subtype_id = ms.n_file_subtype_id WHERE ms.n_media_id = ${n_media_id}", "media"
+input:
+	n_media_id, a media id
+output:
+	a tuple containing:
+		s_file, which identifies the type of file (e.g. 'image')
+		s_file_name, which identifies the size of the file (e.g. 'st', 'bw')
+		s_file_location, which is a relative path to the directory containing all the listed files (e.g. 'NASA/image/sts109-331-005/')
+
+note that there ARE some modules with videos -- let's add in a check so that if we hit a different kind of content, we just pull down the directory
+	it looks like other types include "modules" and "interactive"
+	also, for the images, what we want is the backup in med_arc, not the original
+
+"SELECT t_body FROM t_page_quiz p INNER JOIN t_quiz_question qq ON p.n_page_quiz_id = qq.n_page_quiz_id INNER JOIN t_ques_body q ON qq.n_quiz_ques_id = q.n_quiz_ques_id INNER JOIN t_body b ON q.n_body_id = b.n_body_id WHERE n_section_page_id = {section_page_id} ORDER BY n_sequence", "docent"
+input:
+	section_page_id, a page id
+output:
+	unknown. appears to be a list containing journal questions? nothing in this section that i can find has any
+
+"SELECT DISTINCT s_word FROM t_page_term p INNER JOIN t_word w ON p.n_word_id = w.n_word_id INNER JOIN t_tour_term t ON p.n_tour_term_id = t.n_tour_term_id WHERE n_tour_id = {frm_tour_id} AND n_section_page_id = {section_page_id} ORDER BY s_word", "docent"
+input:
+	n_tour_id, a tour id
+	section_page_id, a section id
+output:
+	a list containing a tuple containing dictionary terms
+
+
+"SELECT t_notes, n_user_access_id, t_timestamp FROM t_notes n INNER JOIN t_page_notes p ON n.n_notes_id = p.n_notes_id WHERE n_section_page_id = {section_page_id} ORDER BY t_timestamp", "docent"
+input:
+	section_page_id, a page id
+output:
+	a list of tuples containing
+		a string, the text of the note
+		a number, the id of the user who made the note,
+		a datetime.datetime, the time the user posted the note
+
+"SELECT s_first_name FROM t_user u INNER JOIN t_user_access a ON u.n_user_id = a.n_user_id WHERE n_user_access_id = {user_access_id}", "docent"
+input:
+	user_access_id, a user id
+output:
+	a list containing a tuple containing a string, the first name of the user
+
+"SELECT s_last_name FROM t_user u INNER JOIN t_user_access a ON u.n_user_id = a.n_user_id WHERE n_user_access_id = {user_access_id}"
+like above, but for the last name
