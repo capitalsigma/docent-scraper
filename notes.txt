@@ -15,7 +15,7 @@ GENERAL NOTES:
 input:
 	a tour ID
 output:
-	a tuple containing a list of section IDs and section titles
+	a list containing tuples of section IDs and section titles
 
 
 "SELECT n_section_page_id, x.n_tour_section_id FROM t_section_page s INNER JOIN t_page p ON s.n_page_id = p.n_page_id INNER  JOIN t_tour_section x ON s.n_tour_section_id = x.n_tour_section_id WHERE n_tour_id = {frm_tour_id} AND x.n_sequence = {set_count} ORDER BY s.n_sequence", "docent"
@@ -23,7 +23,7 @@ input:
 	set_count: section id, SETID
 	frm_tour_id: tour id, TID
 output:
-	a tuple containing the setid that was input, plus a page id
+	a list of tuples containing the setid that was input, plus a page id
 
 "SELECT s_text FROM t_text t INNER JOIN t_page_text p ON t.n_text_id = p.n_text_id WHERE n_section_page_id = {section_page_id}", "docent"
 input:
