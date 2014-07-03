@@ -3,6 +3,7 @@ import collections
 import requests
 import re
 import logging
+import json
 
 from mysql import connector
 from sys import argv
@@ -105,7 +106,7 @@ class Database:
         self._media_cx = connector.connect(user=username,
                                            password=password,
                                            host=self.HOST,
-                                           database=self.DATA_DB)
+                                           database=self.MEDIA_DB)
 
         self._dcur = self._data_cx.cursor()
         self._mcur = self._media_cx.cursor()
@@ -209,15 +210,15 @@ class Database:
         '''
         Get a list of the journal questions on the page.
         '''
-        QUERY_FMT = "SELECT DISTINCT s_word FROM t_page_term p INNER JOIN "\
-                    "t_word w ON p.n_word_id = w.n_word_id INNER JOIN "\
-                    "t_tour_term t ON p.n_tour_term_id = t.n_tour_term_id "\
-                    "WHERE n_tour_id = {tour_id} AND n_section_page_id = "\
-                    "{page_id} ORDER BY s_word"
+        QUERY_FMT = "SELECT t_body FROM t_page_quiz p INNER JOIN "\
+                    "t_quiz_question qq ON p.n_page_quiz_id = "\
+                    "qq.n_page_quiz_id INNER JOIN t_ques_body q ON "\
+                    "qq.n_quiz_ques_id = q.n_quiz_ques_id INNER JOIN t_body "\
+                    "b ON q.n_body_id = b.n_body_id WHERE n_section_page_id = "\
+                    "{page_id} ORDER BY n_sequence"
 
         # Wrapped in a tuple
         return [question[0] for question in self._dex(QUERY_FMT,
-                                                      tour_id=tour_id,
                                                       page_id=page_id)]
 
     def page_to_words(self, tour_id, page_id):
@@ -275,8 +276,7 @@ class PrintableMixin:
             if el[0] != "_":
                 els.append("{}: {}".format(el, self.__dict__[el]))
 
-        return name.format(self.__class__.split(".")[1],
-                           "\n".join(els))
+        return name.format(self.__class__.__name__, "\n".join(els))
 
 class SectionBuilder(DBBuilder):
     def __init__(self, db, page_builder):
@@ -299,8 +299,8 @@ class SectionBuilder(DBBuilder):
 class PageBuilder(DBBuilder):
     LOGFILE_FMT = "http://new.web-docent.org/modules/media/{}/log.txt"
     LOGFILE_REGEX = re.compile("^::Archive:(.*)$", re.MULTILINE)
-    BASE_MEDIA_DIR = "/var/www/vhosts/cwd/modules/media/"
-    BASE_ARC_DIR = "/data/cmap/med_arc"
+    BASE_MEDIA_DIR = "/var/www/vhosts/cwd/modules/media/{}"
+    BASE_ARC_DIR = "/data/cmap/med_arc{}"
     # Note that the base dir for archives in the log files does not exist
 
     def for_section(self, tour_id, section_index):
@@ -323,6 +323,9 @@ class PageBuilder(DBBuilder):
 
             page.notes = self._db.page_to_notes(page_id)
 
+            pages.append(page)
+        return pages
+
     def _process_media(self, media_infos):
         image_dirs = set()
         arc_image_paths = set()
@@ -330,17 +333,21 @@ class PageBuilder(DBBuilder):
 
         for file_type, file_name, file_path in media_infos:
             media_dir = self.BASE_MEDIA_DIR.format(file_path)
+            LOG.debug("file type: ", file_type)
+            LOG.debug("file type == image: ", file_type == "image")
             if file_type == "image" and media_dir not in image_dirs:
-                arc_image_paths.append(self._process_logfile(file_path))
-                image_dirs.append(media_dir)
-            elif file_path not in other_media_paths:
-                other_media_paths.append("{}{}".format(media_dir, file_name))
+                arc_image_paths.add(self._process_logfile(file_path))
+                image_dirs.add(media_dir)
+            elif file_type != "image" and file_path not in other_media_paths:
+                other_media_paths.add("{}{}".format(media_dir, file_name))
 
         return image_dirs, arc_image_paths, other_media_paths
 
     def _process_logfile(self, file_path):
         logtext = requests.get(self.LOGFILE_FMT.format(file_path)).text
-        return self.LOGFILE_REGEX.search(logtext).group(0)
+        arc_old = self.LOGFILE_REGEX.search(logtext).group(0)
+
+        return self.BASE_ARC_DIR.format(arc_old.split("med_arc")[1])
 
 
 class Section(PrintableMixin):
@@ -358,14 +365,24 @@ class Page(PrintableMixin):
         self.dictionary_words = []
         self.notes = []
 
+@easylogger.log_at(logging.INFO)
 def main(tour_id):
     db = Database()
     page_builder = PageBuilder(db)
     section_builder = SectionBuilder(db, page_builder)
 
     sections = section_builder.for_tour(tour_id)
-
+    # for section in sections:
+    #     for page in section.pages:
+    #         LOG.info("Page body: ", page.body)
+    #         LOG.info("Page image dirs:", page.image_dirs)
+    #         LOG.info("Page arc path: ", page.arc_image_paths)
+    #         LOG.info("Page questions: ", page.questions)
+    #         LOG.info("Page dictionary words: ", page.dictionary_words)
+    #         LOG.info("Page notes: ", page.notes)
     print(sections)
 
+    return sections
+
 if __name__ == '__main__':
-    main(argv[1])
+    res = main(argv[1])
