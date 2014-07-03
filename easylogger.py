@@ -29,18 +29,12 @@ class EasyLogger:
         return getattr(self.logger, name)
 
 
-LOGGING_FMT = "<%(filename)s:%(lineno)s(%(levelname)s) - %(funcName)s() >"\
-                        "%(message)s"
+LOGGING_FMT = "<%(levelname)s> %(message)s"
 logging.basicConfig(level=logging.DEBUG, format=LOGGING_FMT)
 
 # LOG = logging.getLogger(__name__)
 
 LOG = EasyLogger()
-
-BASE = "../"
-INPUT = "{}input/".format(BASE)
-CACHE = "input_cache/"
-
 
 
 def log_at(new_level=logging.ERROR, logger=LOG):

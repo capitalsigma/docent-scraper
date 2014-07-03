@@ -2,6 +2,7 @@ import subprocess
 import collections
 import requests
 import re
+import logging
 
 from mysql import connector
 from sys import argv
@@ -9,7 +10,7 @@ from sys import argv
 import easylogger
 import config
 
-LOG = easylogger.LOG
+LOG = easylogger.EasyLogger(logging.getLogger(__name__))
 
 class SCPError(Exception):
     pass
@@ -53,7 +54,7 @@ class SCP:
     download(remote : string, local : string) -> void / BadFileTransferError
     """
 
-    def __init__(self, password=config.PASSWORD, user=config.USER,
+    def __init__(self, password=config.SCP_PASSWORD, user=config.SCP_USERNAME,
                  scp_fmt=config.SCP_COMMAND):
 
         self._password = password
@@ -116,7 +117,9 @@ class Database:
         query = query_string.format(**kwargs)
         LOG.debug("Sending query to database: ", query)
         cursor.execute(query)
-        return cursor.fetchall()
+        res = cursor.fetchall()
+        LOG.debug("Got results: ", res)
+        return res
 
     def _dex(self, query_string, **kwargs):
         '''
@@ -136,8 +139,8 @@ class Database:
         '''
         Get a list of tuples containing section ids and titles.
         '''
-        QUERY_FMT = "SELECT n_tour_section_id, s_section FROM t_tour_section t"\
-                    "INNER JOIN t_section s ON t.n_section_id = s.n_section_id"\
+        QUERY_FMT = "SELECT n_tour_section_id, s_section FROM t_tour_section t "\
+                    "INNER JOIN t_section s ON t.n_section_id = s.n_section_id "\
                     "WHERE n_tour_id = {tour_id} ORDER BY n_sequence"
 
         return self._dex(QUERY_FMT, tour_id=tour_id)
@@ -147,20 +150,25 @@ class Database:
         Get a list of page ids from a tour id and the index of the
         desired section, counting from 1.
         '''
-        QUERY_FMT = "SELECT n_section_page_id, x.n_tour_section_id FROM"\
-                    "t_section_page s INNER JOIN t_page p ON"\
-                    "s.n_page_id = p.n_page_id INNER  JOIN t_tour_section x ON"\
-                    "s.n_tour_section_id = x.n_tour_section_id WHERE"\
-                    "n_tour_id = {tour_id} AND x.n_sequence = {section_index}"\
+        QUERY_FMT = "SELECT n_section_page_id FROM "\
+                    "t_section_page s INNER JOIN t_page p ON "\
+                    "s.n_page_id = p.n_page_id INNER  JOIN t_tour_section x ON "\
+                    "s.n_tour_section_id = x.n_tour_section_id WHERE "\
+                    "n_tour_id = {tour_id} AND x.n_sequence = {section_index} "\
                     "ORDER BY s.n_sequence"
-
-        return self._dex(QUERY_FMT, tour_id=tour_id, section_index=section_index)
+        # strip out unnecessary tuples
+        res = [r[0] for r in
+               self._dex(QUERY_FMT, tour_id=tour_id,
+                         section_index=section_index)]
+        # self._dex(QUERY_FMT, tour_id=tour_id,
+        #                  section_index=section_index)
+        return res
 
     def page_to_body_text(self, page_id):
         '''
         Get the main body text of a given page. Note that the body is HTML.
         '''
-        QUERY_FMT = "SELECT s_text FROM t_text t INNER JOIN t_page_text p ON"\
+        QUERY_FMT = "SELECT s_text FROM t_text t INNER JOIN t_page_text p ON "\
                     "t.n_text_id = p.n_text_id WHERE n_section_page_id = "\
                     "{page_id}"
 
@@ -181,7 +189,7 @@ class Database:
                          "f.n_file_id = fs.n_file_id INNER JOIN "\
                          "t_media_subtype ms ON fs.n_file_subtype_id "\
                          "= ms.n_file_subtype_id WHERE ms.n_media_id = "\
-                         "${media_id}"
+                         "{media_id}"
 
         media_ids = self._dex(ID_QUERY_FMT, page_id=page_id)
 
@@ -246,7 +254,7 @@ class Database:
 
         ret = []
 
-        for text, user_id, date in self._dex(NOTE_QUERY_FMT, page=page_id):
+        for text, user_id, date in self._dex(NOTE_QUERY_FMT, page_id=page_id):
             first_name = self._dex(FIRST_QUERY_FMT, user_id=user_id)
             last_name = self._dex(LAST_QUERY_FMT, user_id=user_id)
 
@@ -282,7 +290,7 @@ class SectionBuilder(DBBuilder):
             section = Section()
             section.title = title
 
-            section.pages = self.page_builder.for_section(tour_id, index)
+            section.pages = self.page_builder.for_section(tour_id, index + 1)
             sections.append(section)
 
         return sections
@@ -299,11 +307,11 @@ class PageBuilder(DBBuilder):
         pages = []
         for page_id in self._db.section_to_pages(tour_id, section_index):
             page = Page()
-            page.body = self._db.page_to_body_text(tour_id, section_index)
+            page.body = self._db.page_to_body_text(page_id)
 
-            media_infos = self._db.page_to_body_text(page_id)
+            media_infos = self._db.page_to_media_info(page_id)
             image_dir, arc_image_dir, \
-                other_media = self._process_media(media_infos)
+                other_media = self._process_media(media_infos or [])
 
             page.image_dirs = image_dir
             page.arc_image_paths = arc_image_dir
@@ -311,8 +319,7 @@ class PageBuilder(DBBuilder):
 
             page.questions = self._db.page_to_questions(tour_id, page_id)
 
-            page.dictionary_words = self._db.page_to_words(self,
-                                                           tour_id, page_id)
+            page.dictionary_words = self._db.page_to_words(tour_id, page_id)
 
             page.notes = self._db.page_to_notes(page_id)
 
@@ -328,6 +335,8 @@ class PageBuilder(DBBuilder):
                 image_dirs.append(media_dir)
             elif file_path not in other_media_paths:
                 other_media_paths.append("{}{}".format(media_dir, file_name))
+
+        return image_dirs, arc_image_paths, other_media_paths
 
     def _process_logfile(self, file_path):
         logtext = requests.get(self.LOGFILE_FMT.format(file_path)).text
