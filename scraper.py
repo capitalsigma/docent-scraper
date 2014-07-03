@@ -199,7 +199,7 @@ class Database:
         file_infos = []
 
         for media_id in media_ids:
-            file_infos.extend(self._mex(INFO_QUERY_FMT, media_id=media_id))
+            file_infos.extend(self._mex(INFO_QUERY_FMT, media_id=media_id[0]))
 
         LOG.debug("got infos: ", file_infos)
 
