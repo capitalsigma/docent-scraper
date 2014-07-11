@@ -377,6 +377,7 @@ class Printer:
             to_print = string.decode()
         except AttributeError:
             to_print = string
+        to_print = to_print.replace("|", "'")
         print("{}{}".format(
             " " * (math.floor(self._indentation * self._current_level)),
             ftfy.fix_text(to_print)))
