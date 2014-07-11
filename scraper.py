@@ -3,6 +3,8 @@ import collections
 import requests
 import re
 import logging
+import math
+import ftfy
 
 from mysql import connector
 from sys import argv
@@ -365,23 +367,89 @@ class Page(PrintableMixin):
         self.dictionary_words = []
         self.notes = []
 
+class Printer:
+    def __init__(self, indentation=4):
+        self._indentation = indentation
+        self._current_level = 0
+
+    def _print(self, string):
+        try:
+            to_print = string.decode()
+        except AttributeError:
+            to_print = string
+        print("{}{}".format(
+            " " * (math.floor(self._indentation * self._current_level)),
+            ftfy.fix_text(to_print)))
+
+    def _with_inc_indent(self, fun, args):
+        self._current_level += 1
+        fun(*args)
+        self._current_level -= 1
+
+    def _split_lines(self, left, right, rhs_multiline=False):
+        self._print(left)
+        self._current_level += .5
+        if rhs_multiline:
+            for el in right:
+                self._print(el)
+        else:
+            self._print(right)
+        self._current_level -= .5
+
+    def _print_note(self, note):
+        self._print("Text: {}".format(note.text))
+        self._print("Date: {}".format(note.date))
+        self._print("Submitted by: {} {}".format(
+            note.first_name[0][0], note.last_name[0][0]))
+
+    def _print_notes(self, notes):
+        self._print("Notes:")
+        for note in notes:
+            self._with_inc_indent(self._print_note, (note,))
+
+    def _print_page(self, page):
+        self._split_lines("Body:", page.body)
+        self._split_lines("Archived image paths: ", page.arc_image_paths, True)
+        self._split_lines("Questions: ", page.questions, True)
+        self._split_lines("Dictionary words: ", page.dictionary_words, True)
+        self._split_lines("Paths to non-image media: ", page.other_media_paths, True)
+        # self._split_lines("Notes: ", page.notes, True)
+        self._print_notes(page.notes)
+
+    def _print_pages(self, pages): #
+        for index, page in enumerate(pages):
+            self._print("Page #{}:".format(index))
+            self._with_inc_indent(self._print_page, (page,))
+
+
+    def print_sections(self, sections):
+        for index, section in enumerate(sections):
+            self._print("Section #{}, title: {}".format(index, section.title))
+            self._print("Pages: ")
+            self._with_inc_indent(self._print_pages, (section.pages,))
+
+
 @easylogger.log_at(new_level=logging.ERROR)
 def main(tour_id):
     db = Database()
     page_builder = PageBuilder(db)
     section_builder = SectionBuilder(db, page_builder)
 
+    print("CONTENT FOR TOUR ID {}".format(tour_id))
+
     sections = section_builder.for_tour(tour_id)
-    for section in sections:
-        print("Section title: ", section.title)
-        print("Pages:")
-        for page in section.pages:
-            print("Page body: ", page.body)
-            print("Page image dirs:", page.image_dirs)
-            print("Page arc path: ", page.arc_image_paths)
-            print("Page questions: ", page.questions)
-            print("Page dictionary words: ", page.dictionary_words)
-            print("Page notes: ", page.notes)
+    printer = Printer()
+    printer.print_sections(sections)
+    # for section in sections:
+    #     print("Section title: ", section.title)
+    #     print("Pages:")
+    #     for page in section.pages:
+    #         print("Page body: ", page.body)
+    #         print("Page image dirs:", page.image_dirs)
+    #         print("Page arc path: ", page.arc_image_paths)
+    #         print("Page questions: ", page.questions)
+    #         print("Page dictionary words: ", page.dictionary_words)
+    #         print("Page notes: ", page.notes)
     # print(sections)
 
     return sections
