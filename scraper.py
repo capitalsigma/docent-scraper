@@ -9,11 +9,11 @@ import ftfy
 from mysql import connector
 from sys import argv
 
-import easylogger
+# import easylogger
 import config
-logging.basicConfig(level=logging.ERROR)
-LOG = easylogger.EasyLogger(logging.getLogger(__name__))
-LOG.setLevel(logging.INFO)
+# logging.basicConfig(level=logging.ERROR)
+# LOG = easylogger.EasyLogger(logging.getLogger(__name__))
+# LOG.setLevel(logging.ERROR)
 
 class SCPError(Exception):
     pass
@@ -429,16 +429,17 @@ class Printer:
             self._with_inc_indent(self._print_pages, (section.pages,))
 
 
-@easylogger.log_at(new_level=logging.ERROR)
+# @easylogger.log_at(new_level=logging.ERROR)
 def main(tour_id):
     db = Database()
     page_builder = PageBuilder(db)
     section_builder = SectionBuilder(db, page_builder)
 
-    print("CONTENT FOR TOUR ID {}".format(tour_id))
+
 
     sections = section_builder.for_tour(tour_id)
     printer = Printer()
+    print("CONTENT FOR TOUR ID {}".format(tour_id))
     printer.print_sections(sections)
     # for section in sections:
     #     print("Section title: ", section.title)
