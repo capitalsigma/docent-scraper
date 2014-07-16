@@ -5,15 +5,18 @@ import re
 import logging
 import math
 import ftfy
+import argparse
+import os
+import gzip
 
 from mysql import connector
 from sys import argv
 
-# import easylogger
+import easylogger
 import config
-# logging.basicConfig(level=logging.ERROR)
-# LOG = easylogger.EasyLogger(logging.getLogger(__name__))
-# LOG.setLevel(logging.ERROR)
+
+# LOG = easylogger.LOG
+LOG = easylogger.EasyLogger()
 
 class SCPError(Exception):
     pass
@@ -30,6 +33,8 @@ class RemoteFileError(SCPError):
 class SCPConnectionError(SCPError):
     pass
 
+class BadArgumentsError:
+    pass
 
 class MultiKeyDict:
     """
@@ -46,7 +51,14 @@ class MultiKeyDict:
 Note = collections.namedtuple("Note", ["text", "date", "first_name",
                                        "last_name"])
 
-class SCP:
+class AbstractGetter:
+    @staticmethod
+    def _build_unzipped_name(name):
+        file_name = os.path.basename(name)
+        # strip off .gz
+        return file_name[:-3]
+
+class SCPGetter:
     """
     Manages interaction with SCP to download files. Factored out into
     a separate class so that later we can do this differently if we
@@ -54,7 +66,7 @@ class SCP:
 
     The interface here is:
 
-    download(remote : string, local : string) -> void / BadFileTransferError
+    get(remote : string, local : string) -> void / BadFileTransferError
     """
 
     def __init__(self, password=config.SCP_PASSWORD, user=config.SCP_USERNAME,
@@ -70,7 +82,7 @@ class SCP:
                                     remote=remote,
                                     local=local)
 
-    def download(self, remote, local):
+    def get(self, remote, local):
         try:
             subprocess.call(self._build_query(remote, local))
 
@@ -87,6 +99,58 @@ class SCP:
                     err.returncode))
             except KeyError:
                 raise err
+
+        return gzip.open(local), self._build_unzipped_name(local)
+
+class LocalGetter:
+    def get(self, remote, local):
+        pass
+
+class AbstractDownloader:
+    '''Wrapper around one of SCP, symlink and noop to manage download
+    behavior
+    '''
+
+    def __init__(self, getter=None):
+        self._getter = getter
+
+    def get(self, remote, section_id, page_id):
+        raise NotImplementedError
+
+class NoOpDownloader(AbstractDownloader):
+    def get(self, remote, section_id, page_id):
+        return None
+
+class RealDownloader(AbstractDownloader):
+    def __init__(self, getter, tid):
+        super().__init__(getter)
+
+        self._root_dir = os.path.join(os.getcwd(), "tour-{}-images".format(tid))
+
+        os.mkdir(self._root_dir)
+
+    def get(self, remote, section_id, page_id):
+        new_dir = os.path.join(self._root_dir,
+                               "section-{}".format(section_id),
+                               "page-{}".format(page_id))
+        filename = os.path.basename(remote)
+
+        try:
+            os.mkdirs(new_dir)
+        except OSError:
+            # dir already exists
+            pass
+
+        with self._getter(remote, os.path.join(new_dir, filename)) \
+             as (new_gzipped, unzipped_name):
+            with open(unzipped_name, "wb") as new_file:
+                new_file.write(new_gzipped.read())
+
+        return unzipped_name
+
+
+
+
 
 
 class Database:
@@ -297,36 +361,42 @@ class SectionBuilder(DBBuilder):
 
         return sections
 
-
-class PageBuilder(DBBuilder):
+class MediaBuilder:
     LOGFILE_FMT = "http://new.web-docent.org/modules/media/{}/log.txt"
     LOGFILE_REGEX = re.compile("^::Archive:(.*)$", re.MULTILINE)
-    BASE_MEDIA_DIR = "/var/www/vhosts/cwd/modules/media/{}"
-    BASE_ARC_DIR = "/data/cmap/med_arc{}"
-    # Note that the base dir for archives in the log files does not exist
 
-    def for_section(self, tour_id, section_index):
-        pages = []
-        for page_id in self._db.section_to_pages(tour_id, section_index):
-            page = Page()
-            page.body = self._db.page_to_body_text(page_id)
+    def __init__(self, downloader):
+        self._downloader = downloader
 
-            media_infos = self._db.page_to_media_info(page_id)
-            image_dir, arc_image_dir, \
-                other_media = self._process_media(media_infos or [])
+    def for_page(self, media_infos, page_id, tour_id):
+        media = []
 
-            page.image_dirs = image_dir
-            page.arc_image_paths = arc_image_dir
-            page.other_media_paths = other_media
+        image_dirs, arc_image_paths, \
+            other_media_paths = self._process_media(media_infos)
 
-            page.questions = self._db.page_to_questions(tour_id, page_id)
+        for image_dir, arc_media_path in zip(image_dirs, arc_media_paths):
+            media_item = Media()
+            media_item.remote_path = image_dir
+            media_item.arc_path = arc_media_path
+            media_item.media_type = "image"
 
-            page.dictionary_words = self._db.page_to_words(tour_id, page_id)
+            media.append(media_item)
 
-            page.notes = self._db.page_to_notes(page_id)
+        for media_path in other_media_paths:
+            media_item = Media()
+            media_item.remote_path = media_path
+            media_item.media_type = "other"
 
-            pages.append(page)
-        return pages
+            media.append(media_item)
+
+        return media
+
+
+    def _process_logfile(self, file_path):
+        logtext = requests.get(self.LOGFILE_FMT.format(file_path)).text
+        arc_old = self.LOGFILE_REGEX.search(logtext).group(0)
+
+        return self.BASE_ARC_DIR.format(arc_old.split("med_arc")[1])
 
     def _process_media(self, media_infos):
         image_dirs = set()
@@ -345,11 +415,40 @@ class PageBuilder(DBBuilder):
 
         return image_dirs, arc_image_paths, other_media_paths
 
-    def _process_logfile(self, file_path):
-        logtext = requests.get(self.LOGFILE_FMT.format(file_path)).text
-        arc_old = self.LOGFILE_REGEX.search(logtext).group(0)
+class PageBuilder(DBBuilder):
+    BASE_MEDIA_DIR = "/var/www/vhosts/cwd/modules/media/{}"
+    BASE_ARC_DIR = "/data/cmap/med_arc{}"
+    # Note that the base dir for archives in the log files does not exist
 
-        return self.BASE_ARC_DIR.format(arc_old.split("med_arc")[1])
+    def __init__(self, db, media_builder):
+        super().__init__(db)
+        self._media_builder = media_builder
+
+    def for_section(self, tour_id, section_index):
+        pages = []
+
+        for page_id in self._db.section_to_pages(tour_id, section_index):
+            page = Page()
+            page.body = self._db.page_to_body_text(page_id)
+
+            media_infos = self._db.page_to_media_info(page_id)
+            # image_dir, arc_image_dir, \
+            #     other_media = self._process_media(media_infos or [])
+            page.meida = media_builder.for_page(media_infos)
+
+
+            # page.image_dirs = image_dir
+            # page.arc_image_paths = arc_image_dir
+            # page.other_media_paths = other_media
+
+            page.questions = self._db.page_to_questions(tour_id, page_id)
+
+            page.dictionary_words = self._db.page_to_words(tour_id, page_id)
+
+            page.notes = self._db.page_to_notes(page_id)
+
+            pages.append(page)
+        return pages
 
 
 class Section(PrintableMixin):
@@ -366,6 +465,15 @@ class Page(PrintableMixin):
         self.questions = []
         self.dictionary_words = []
         self.notes = []
+        self.media = []
+
+
+class Media:
+    def __init__(self):
+        self.remote_path = None
+        self.local_path = None
+        self.arc_path = None
+        self.media_type = None
 
 class Printer:
     def __init__(self, indentation=4):
@@ -431,9 +539,36 @@ class Printer:
 
 
 # @easylogger.log_at(new_level=logging.ERROR)
-def main(tour_id):
+def main():
+    arg_parser = argparse.ArgumentParser(description="Download web docent content.")
+    arg_parser.add_argument(
+        "-i", "--imagefiles",
+        dest="imagefiles",
+        action="store",
+        default="no",
+        help="specify download behavior (default: do not download)")
+    arg_parser.add_argument(
+        "tour_id",
+        metavar="tour id",
+        nargs=1,
+        help="tour id to process",)
+
+    args = arg_parser.parse_args()
+
+    LOG.debug("got args: ", args)
+
+    def raise_error():
+        raise BadArgumentsError
+
+    downloader = collections.defaultdict(raise_errorg, {
+        "yes": lambda: RealDownloader(SCPGetter(), args.tour_id),
+        "local": lambda: RealDownloader(LocalGetter(), args.tour_id),
+        "no": lambda: NoOpDownloader()
+    })[args.imagefiles.lower()]
+
     db = Database()
-    page_builder = PageBuilder(db)
+    media_builder = MediaBuilder(db, downloader)
+    page_builder = PageBuilder(db, media_builder)
     section_builder = SectionBuilder(db, page_builder)
 
 
@@ -442,19 +577,9 @@ def main(tour_id):
     printer = Printer()
     print("CONTENT FOR TOUR ID {}".format(tour_id))
     printer.print_sections(sections)
-    # for section in sections:
-    #     print("Section title: ", section.title)
-    #     print("Pages:")
-    #     for page in section.pages:
-    #         print("Page body: ", page.body)
-    #         print("Page image dirs:", page.image_dirs)
-    #         print("Page arc path: ", page.arc_image_paths)
-    #         print("Page questions: ", page.questions)
-    #         print("Page dictionary words: ", page.dictionary_words)
-    #         print("Page notes: ", page.notes)
-    # print(sections)
+
 
     return sections
 
 if __name__ == '__main__':
-    res = main(argv[1])
+    final_res = main()
