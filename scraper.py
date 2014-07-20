@@ -19,6 +19,7 @@ import config
 
 # LOG = easylogger.LOG
 LOG = easylogger.EasyLogger()
+LOG.setLevel(logging.INFO)
 
 class SCPError(Exception):
     pass
@@ -147,7 +148,7 @@ class RealDownloader(AbstractDownloader):
         new_dir = os.path.join(self._root_dir,
                                "section-{}".format(section_id),
                                "page-{}".format(page_id))
-        filename = os.path.basename(remote)
+        filename = os.path.basename(remote).strip("*")
 
         try:
             os.makedirs(new_dir)
@@ -159,10 +160,12 @@ class RealDownloader(AbstractDownloader):
             new_gzipped, unzipped_name =  self._getter.get(
                 remote, os.path.join(new_dir, filename))
 
-            with open(unzipped_name, "wb") as new_file:
+            unzipped_path = os.path.join(new_dir, unzipped_name)
+
+            with open(unzipped_path, "wb") as new_file:
                 new_file.write(new_gzipped.read())
 
-            return unzipped_name
+            return unzipped_path
 
         except subprocess.CalledProcessError as err:
             LOG.error("Something went wrong trying to download the image",
@@ -398,7 +401,7 @@ class MediaBuilder(DBBuilder):
 
         for image_dir, arc_media_path in zip(image_dirs, arc_media_paths):
             media_item = Media()
-            media_item.remote_dir = image_dir
+            media_item.remote_path = image_dir
             media_item.arc_path = arc_media_path
             media_item.media_type = "image"
             # media_item.remote_path = self.IMAGE_FMT.format(image_dir)
@@ -416,6 +419,7 @@ class MediaBuilder(DBBuilder):
             local_path = self._downloader.get(media_item.arc_path,
                                               section_id,
                                               page_id)
+            media_item.local_path = local_path
 
 
         return media
@@ -562,8 +566,22 @@ class Printer:
         self._print_notes(page.notes)
 
     def _print_media(self, media):
+        self._print("Media:")
+        self._current_level += 1
         for index, media_element in enumerate(media):
-            self._print("Media element #{}:".format(index))
+            self._print("Element #{}".format(index))
+
+            self._current_level += .5
+
+            self._print("Media type: {}".format(media_element.media_type))
+            self._print("Remote path: {}".format(media_element.remote_path))
+            self._print("Archive path: {}".format(media_element.arc_path))
+            self._print("Local path: {}".format(media_element.local_path))
+
+            self._current_level -= .5
+
+        self._current_level -= 1
+
 
     def _print_pages(self, pages): #
         for index, page in enumerate(pages):
