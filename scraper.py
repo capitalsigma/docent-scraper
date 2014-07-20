@@ -1,3 +1,4 @@
+#pylint: disable=line-too-long, invalid-name, too-few-public-methods
 import subprocess
 import collections
 import requests
@@ -8,6 +9,7 @@ import ftfy
 import argparse
 import os
 import gzip
+import shutil
 
 from mysql import connector
 from sys import argv
@@ -33,10 +35,10 @@ class RemoteFileError(SCPError):
 class SCPConnectionError(SCPError):
     pass
 
-class BadArgumentsError:
+class BadArgumentsError(Exception):
     pass
 
-class MultiKeyDict:
+class MultiKeyDict(collections.UserDict):
     """
     Dictionary to simulate 'case 10, 20, 30: ...'-style switch
     """
@@ -56,9 +58,17 @@ class AbstractGetter:
     def _build_unzipped_name(name):
         file_name = os.path.basename(name)
         # strip off .gz
+        LOG.debug("about to return file_name: {}".format(file_name))
         return file_name[:-3]
 
-class SCPGetter:
+    def get(self, remote, local):
+        LOG.debug("Getting remote, {} and local, {}".format(
+            remote, local))
+        self._get(remote, local)
+        return gzip.open(local), self._build_unzipped_name(local)
+
+
+class SCPGetter(AbstractGetter):
     """
     Manages interaction with SCP to download files. Factored out into
     a separate class so that later we can do this differently if we
@@ -80,34 +90,32 @@ class SCPGetter:
         return self._scp_fmt.format(password=self._password,
                                     user=self._user,
                                     remote=remote,
-                                    local=local)
+                                    local=local).split(" ")
 
-    def get(self, remote, local):
-        try:
-            subprocess.call(self._build_query(remote, local))
+    def _get(self, remote, local):
+        subprocess.check_call(self._build_query(remote, local))
 
-        except subprocess.SubprocessError as err:
-            resp = MultiKeyDict({
-                (1, 4, 5, 8, 65, 67, 71, 72, 73, 74, 75, 76, 79): \
-                SCPConnectionError,
-                (2, 3, 7, 10, 70): RemoteFileError,
-                (6): LocalFileError
-            })
+        # except subprocess.CalledProcessError as err:
+        #     resp = MultiKeyDict({
+        #         (1, 4, 5, 8, 65, 67, 71, 72, 73, 74, 75, 76, 79): \
+        #         SCPConnectionError,
+        #         (2, 3, 7, 10, 70): RemoteFileError,
+        #         (6,): LocalFileError
+        #     })
 
-            try:
-                raise resp[err.returncode]("Error code: {}".format(
-                    err.returncode))
-            except KeyError:
-                raise err
+        #     try:
+        #         raise resp[err.returncode]("Error code: {}".format(
+        #             err.returncode))
+        #     except KeyError:
+        #         raise err
 
-        return gzip.open(local), self._build_unzipped_name(local)
-
-class LocalGetter:
-    def get(self, remote, local):
-        pass
+class LocalGetter(AbstractGetter):
+    def _get(self, remote, local):
+        shutil.copy(remote, local)
+        # return gzip.open(local)
 
 class AbstractDownloader:
-    '''Wrapper around one of SCP, symlink and noop to manage download
+    '''Wrapper around one of SCP, Local and NoOp to manage download
     behavior
     '''
 
@@ -127,31 +135,39 @@ class RealDownloader(AbstractDownloader):
 
         self._root_dir = os.path.join(os.getcwd(), "tour-{}-images".format(tid))
 
-        os.mkdir(self._root_dir)
+        try:
+            os.mkdir(self._root_dir)
+        except:
+            LOG.info("WARNING: Directory {} already exists.".format(
+                self._root_dir))
 
     def get(self, remote, section_id, page_id):
+        LOG.debug("Getting remote", remote)
+
         new_dir = os.path.join(self._root_dir,
                                "section-{}".format(section_id),
                                "page-{}".format(page_id))
         filename = os.path.basename(remote)
 
         try:
-            os.mkdirs(new_dir)
+            os.makedirs(new_dir)
         except OSError:
             # dir already exists
             pass
 
-        with self._getter(remote, os.path.join(new_dir, filename)) \
-             as (new_gzipped, unzipped_name):
-            with open(unzipped_name, "wb") as new_file:
-                new_file.write(new_gzipped.read())
+        try:
+            with self._getter.get(remote, os.path.join(new_dir, filename)) \
+                 as (new_gzipped, unzipped_name):
+                with open(unzipped_name, "wb") as new_file:
+                    new_file.write(new_gzipped.read())
 
-        return unzipped_name
+            return unzipped_name
 
+        except subprocess.CalledProcessError as err:
+            LOG.error("Something went wrong trying to download the image",
+                      remote, ". Skipping.")
 
-
-
-
+            return None
 
 class Database:
     HOST = "wit.uchicago.edu"
@@ -361,24 +377,32 @@ class SectionBuilder(DBBuilder):
 
         return sections
 
-class MediaBuilder:
+class MediaBuilder(DBBuilder):
     LOGFILE_FMT = "http://new.web-docent.org/modules/media/{}/log.txt"
     LOGFILE_REGEX = re.compile("^::Archive:(.*)$", re.MULTILINE)
 
-    def __init__(self, downloader):
+    BASE_MEDIA_DIR = "/var/www/vhosts/cwd/modules/media/{}"
+    BASE_ARC_DIR = "/data/cmap/med_arc{}"
+    # Note that the base dir for archives in the log files does not exist
+
+    IMAGE_FMT = "{}/bw.jpg"
+
+    def __init__(self, db, downloader):
+        super().__init__(db)
         self._downloader = downloader
 
-    def for_page(self, media_infos, page_id, tour_id):
+    def for_page(self, media_infos, section_id, page_id):
         media = []
 
-        image_dirs, arc_image_paths, \
+        image_dirs, arc_media_paths, \
             other_media_paths = self._process_media(media_infos)
 
         for image_dir, arc_media_path in zip(image_dirs, arc_media_paths):
             media_item = Media()
-            media_item.remote_path = image_dir
+            media_item.remote_dir = image_dir
             media_item.arc_path = arc_media_path
             media_item.media_type = "image"
+            # media_item.remote_path = self.IMAGE_FMT.format(image_dir)
 
             media.append(media_item)
 
@@ -388,13 +412,22 @@ class MediaBuilder:
             media_item.media_type = "other"
 
             media.append(media_item)
+        LOG.debug("built media: ", media)
+        for media_item in media:
+            local_path = self._downloader.get(media_item.arc_path,
+                                              section_id,
+                                              page_id)
+
 
         return media
 
 
     def _process_logfile(self, file_path):
-        logtext = requests.get(self.LOGFILE_FMT.format(file_path)).text
+        logtext = requests.get(self.LOGFILE_FMT.format(
+            file_path.strip("/"))).text
         arc_old = self.LOGFILE_REGEX.search(logtext).group(0)
+
+        LOG.debug("Got arc_old: ", arc_old)
 
         return self.BASE_ARC_DIR.format(arc_old.split("med_arc")[1])
 
@@ -402,6 +435,8 @@ class MediaBuilder:
         image_dirs = set()
         arc_image_paths = set()
         other_media_paths = set()
+
+        LOG.debug("got media_infos: ", media_infos)
 
         for file_type, file_name, file_path in media_infos:
             media_dir = self.BASE_MEDIA_DIR.format(file_path)
@@ -416,9 +451,6 @@ class MediaBuilder:
         return image_dirs, arc_image_paths, other_media_paths
 
 class PageBuilder(DBBuilder):
-    BASE_MEDIA_DIR = "/var/www/vhosts/cwd/modules/media/{}"
-    BASE_ARC_DIR = "/data/cmap/med_arc{}"
-    # Note that the base dir for archives in the log files does not exist
 
     def __init__(self, db, media_builder):
         super().__init__(db)
@@ -434,7 +466,10 @@ class PageBuilder(DBBuilder):
             media_infos = self._db.page_to_media_info(page_id)
             # image_dir, arc_image_dir, \
             #     other_media = self._process_media(media_infos or [])
-            page.meida = media_builder.for_page(media_infos)
+            page.media = self._media_builder.for_page(media_infos or [],
+                                                      section_index,
+                                                      page_id)
+
 
 
             # page.image_dirs = image_dir
@@ -518,12 +553,17 @@ class Printer:
 
     def _print_page(self, page):
         self._split_lines("Body:", page.body)
-        self._split_lines("Archived image paths: ", page.arc_image_paths, True)
+        # self._split_lines("Archived image paths: ", page.arc_image_paths, True)
         self._split_lines("Questions: ", page.questions, True)
         self._split_lines("Dictionary words: ", page.dictionary_words, True)
-        self._split_lines("Paths to non-image media: ", page.other_media_paths, True)
+        # self._split_lines("Paths to non-image media: ", page.other_media_paths, True)
         # self._split_lines("Notes: ", page.notes, True)
+        self._print_media(page.media)
         self._print_notes(page.notes)
+
+    def _print_media(self, media):
+        for index, media_element in enumerate(media):
+            self._print("Media element #{}:".format(index))
 
     def _print_pages(self, pages): #
         for index, page in enumerate(pages):
@@ -557,14 +597,16 @@ def main():
 
     LOG.debug("got args: ", args)
 
+    tour_id = args.tour_id[0]
+
     def raise_error():
         raise BadArgumentsError
 
-    downloader = collections.defaultdict(raise_errorg, {
-        "yes": lambda: RealDownloader(SCPGetter(), args.tour_id),
-        "local": lambda: RealDownloader(LocalGetter(), args.tour_id),
+    downloader = collections.defaultdict(raise_error, {
+        "yes": lambda: RealDownloader(SCPGetter(), tour_id),
+        "local": lambda: RealDownloader(LocalGetter(), tour_id),
         "no": lambda: NoOpDownloader()
-    })[args.imagefiles.lower()]
+    })[args.imagefiles.lower()]()
 
     db = Database()
     media_builder = MediaBuilder(db, downloader)
