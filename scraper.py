@@ -156,10 +156,11 @@ class RealDownloader(AbstractDownloader):
             pass
 
         try:
-            with self._getter.get(remote, os.path.join(new_dir, filename)) \
-                 as (new_gzipped, unzipped_name):
-                with open(unzipped_name, "wb") as new_file:
-                    new_file.write(new_gzipped.read())
+            new_gzipped, unzipped_name =  self._getter.get(
+                remote, os.path.join(new_dir, filename))
+
+            with open(unzipped_name, "wb") as new_file:
+                new_file.write(new_gzipped.read())
 
             return unzipped_name
 
@@ -382,10 +383,8 @@ class MediaBuilder(DBBuilder):
     LOGFILE_REGEX = re.compile("^::Archive:(.*)$", re.MULTILINE)
 
     BASE_MEDIA_DIR = "/var/www/vhosts/cwd/modules/media/{}"
-    BASE_ARC_DIR = "/data/cmap/med_arc{}"
+    BASE_ARC_DIR = "/data/cmap/med_arc/*{}"
     # Note that the base dir for archives in the log files does not exist
-
-    IMAGE_FMT = "{}/bw.jpg"
 
     def __init__(self, db, downloader):
         super().__init__(db)
@@ -426,10 +425,11 @@ class MediaBuilder(DBBuilder):
         logtext = requests.get(self.LOGFILE_FMT.format(
             file_path.strip("/"))).text
         arc_old = self.LOGFILE_REGEX.search(logtext).group(0)
+        file_name = arc_old.split("med_arc")[1].strip("/")
 
         LOG.debug("Got arc_old: ", arc_old)
 
-        return self.BASE_ARC_DIR.format(arc_old.split("med_arc")[1])
+        return self.BASE_ARC_DIR.format(file_name)
 
     def _process_media(self, media_infos):
         image_dirs = set()
