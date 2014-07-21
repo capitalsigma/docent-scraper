@@ -10,6 +10,7 @@ import argparse
 import os
 import gzip
 import shutil
+import glob
 
 from mysql import connector
 from sys import argv
@@ -112,7 +113,8 @@ class SCPGetter(AbstractGetter):
 
 class LocalGetter(AbstractGetter):
     def _get(self, remote, local):
-        shutil.copy(remote, local)
+        for f in globl.glob(remote):
+            shutil.copy(remote, local)
         # return gzip.open(local)
 
 class AbstractDownloader:
