@@ -114,7 +114,7 @@ class SCPGetter(AbstractGetter):
 class LocalGetter(AbstractGetter):
     def _get(self, remote, local):
         for f in glob.glob(remote):
-            shutil.copy(remote, local)
+            shutil.copy(f, local)
         # return gzip.open(local)
 
 class AbstractDownloader:
