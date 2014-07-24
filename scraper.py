@@ -140,7 +140,7 @@ class RealDownloader(AbstractDownloader):
 
         try:
             os.mkdir(self._root_dir)
-        except:
+        except OSError:
             LOG.info("WARNING: Directory {} already exists.".format(
                 self._root_dir))
 
@@ -159,7 +159,7 @@ class RealDownloader(AbstractDownloader):
             pass
 
         try:
-            new_gzipped, unzipped_name =  self._getter.get(
+            new_gzipped, unzipped_name = self._getter.get(
                 remote, os.path.join(new_dir, filename))
 
             unzipped_path = os.path.join(new_dir, unzipped_name)
@@ -224,6 +224,24 @@ class Database:
         #LOG.debug("Querying docent_media")
         return self._execute(self._mcur, query_string, **kwargs)
 
+    def tour_to_tour_title(self, tour_id):
+        '''
+        Get the title of a tour.
+        '''
+        QUERY_FMT = "SELECT s_tour FROM t_tour WHERE n_tour_id = {tour_id}"
+
+        return self._dex(QUERY_FMT, tour_id=tour_id)[0][0]
+
+    def tour_to_module_title(self, tour_id):
+        '''
+        Get the title of a module, given a tour.
+        '''
+        QUERY_FMT = "SELECT s_module FROM t_module INNER JOIN t_module_tour "\
+                    "ON t_module_tour.n_module_id=t_module.n_module_id WHERE "\
+                    "n_tour_id = {tour_id}"
+
+        return self._dex(QUERY_FMT, tour_id=tour_id)[0][0]
+
     def tour_to_sections_and_titles(self, tour_id):
         '''
         Get a list of tuples containing section ids and titles.
@@ -264,6 +282,18 @@ class Database:
         # it's wrapped in a tuple in a list.
         return self._dex(QUERY_FMT, page_id=page_id)[0][0]
 
+    def media_id_to_title_and_caption(self, media_id, page_id):
+        QUERY_FMT = "SELECT s_title, s_caption FROM t_page_media "\
+                    "WHERE n_media_id = {media_id} AND "\
+                    "n_section_page_id = {page_id}"
+        resp = self._dex(QUERY_FMT, media_id=media_id, page_id=page_id)
+
+        LOG.debug("got resp:", resp)
+
+        return resp[0]
+
+
+
     def page_to_media_info(self, page_id):
         '''
         Get a list of the files associated with the given page id, tagged
@@ -280,7 +310,8 @@ class Database:
                          "= ms.n_file_subtype_id WHERE ms.n_media_id = "\
                          "{media_id}"
 
-        media_ids = self._dex(ID_QUERY_FMT, page_id=page_id)
+        media_ids = [x[0] for x in self._dex(ID_QUERY_FMT, page_id=page_id)]
+
 
         #LOG.debug("got ids: ", media_ids)
 
@@ -288,7 +319,8 @@ class Database:
         file_infos = []
 
         for media_id in media_ids:
-            file_infos.extend(self._mex(INFO_QUERY_FMT, media_id=media_id[0]))
+            for info in self._mex(INFO_QUERY_FMT, media_id=media_id):
+                file_infos.append((info, media_id))
 
         #LOG.debug("got infos: ", file_infos)
 
@@ -395,17 +427,22 @@ class MediaBuilder(DBBuilder):
         super().__init__(db)
         self._downloader = downloader
 
-    def for_page(self, media_infos, section_id, page_id):
+    def for_page(self, media_infos, section_id, page_id, infos_to_ids):
         media = []
 
         image_dirs, arc_media_paths, \
             other_media_paths = self._process_media(media_infos)
 
+        LOG.debug("got image dirs: ", image_dirs)
+        LOG.debug("got arc media paths: ", arc_media_paths)
+
         for image_dir, arc_media_path in zip(image_dirs, arc_media_paths):
-            media_item = Media()
-            media_item.remote_path = image_dir
-            media_item.arc_path = arc_media_path
-            media_item.media_type = "image"
+            LOG.debug("processing image_dir:", image_dir, "and arc_media_path:",
+                      arc_media_path)
+            media_item = self._build_image(image_dir,
+                                           arc_media_path,
+                                           infos_to_ids,
+                                           page_id)
             # media_item.remote_path = self.IMAGE_FMT.format(image_dir)
 
             media.append(media_item)
@@ -425,6 +462,41 @@ class MediaBuilder(DBBuilder):
 
 
         return media
+
+    def _build_image(self, image_dir, arc_media_path, infos_to_ids, page_id):
+        media_item = Media()
+        media_item.remote_path = image_dir
+        media_item.arc_path = arc_media_path
+        media_item.media_type = "image"
+
+        title = None
+        caption = None
+
+        LOG.debug("building for image_dir: ", image_dir)
+        LOG.debug("with infos_to_ids: ", infos_to_ids)
+
+        try:
+            short_image_dir = image_dir.split("/")[-1]
+
+            media_id = [value for key, value in infos_to_ids.items()
+                        if short_image_dir in key][0]
+
+            LOG.debug("media_id: {}".format(media_id))
+
+            title, caption = self._db.media_id_to_title_and_caption(
+                media_id, page_id)
+
+
+
+        except (ValueError, IndexError) as e:
+        # except BadArgumentsError as e:
+            LOG.debug("Caught exception: {}".format(e))
+            pass
+
+        media_item.title = title
+        media_item.caption = caption
+
+        return media_item
 
 
     def _process_logfile(self, file_path):
@@ -446,7 +518,7 @@ class MediaBuilder(DBBuilder):
 
         for file_type, file_name, file_path in media_infos:
             media_dir = self.BASE_MEDIA_DIR.format(file_path)
-            #LOG.debug("file type: ", file_type)
+            LOG.debug("file type: ", file_type)
             #LOG.debug("file type == image: ", file_type == "image")
             if file_type == "image" and media_dir not in image_dirs:
                 arc_image_paths.add(self._process_logfile(file_path))
@@ -467,14 +539,24 @@ class PageBuilder(DBBuilder):
 
         for page_id in self._db.section_to_pages(tour_id, section_index):
             page = Page()
+            page.page_id = page_id
             page.body = self._db.page_to_body_text(page_id)
 
-            media_infos = self._db.page_to_media_info(page_id)
+            media_infos_and_ids = self._db.page_to_media_info(page_id)
+            LOG.debug("Got media_infos_and_ids:", media_infos_and_ids)
+
+            media_infos_to_ids = {"".join(infos): page_id for
+                                  infos, page_id in media_infos_and_ids}
+
+            LOG.debug("Got media_infos_to_ids:", media_infos_to_ids)
+
+            file_infos = [x[0] for x in media_infos_and_ids]
             # image_dir, arc_image_dir, \
             #     other_media = self._process_media(media_infos or [])
-            page.media = self._media_builder.for_page(media_infos or [],
+            page.media = self._media_builder.for_page(file_infos,
                                                       section_index,
-                                                      page_id)
+                                                      page_id,
+                                                      media_infos_to_ids)
 
 
 
@@ -500,6 +582,7 @@ class Section(PrintableMixin):
 class Page(PrintableMixin):
     def __init__(self):
         self.body = None
+        self.page_id = None
         self.image_dirs = set()
         self.arc_image_paths = set()
         self.other_media_paths = set()
@@ -515,21 +598,31 @@ class Media:
         self.local_path = None
         self.arc_path = None
         self.media_type = None
+        self.title = None
+        self.caption = None
 
 class Printer:
+    SEP = "-" * 25
+
     def __init__(self, indentation=4):
         self._indentation = indentation
         self._current_level = 0
+        self._pages_so_far = 0
+        self._bodies = []
 
     def _print(self, string):
         try:
             to_print = string.decode()
         except AttributeError:
             to_print = string
-        to_print = to_print.replace("|", "'")
+        to_print = self._fix_unicode(to_print)
         print("{}{}".format(
             " " * (math.floor(self._indentation * self._current_level)),
-            ftfy.fix_text(to_print)))
+            to_print))
+
+    def _fix_unicode(self, to_fix):
+        bar_fixed = to_fix.replace("|", "'")
+        return ftfy.fix_text(bar_fixed)
 
     def _with_inc_indent(self, fun, args):
         self._current_level += 1
@@ -567,10 +660,20 @@ class Printer:
         self._print_media(page.media)
         self._print_notes(page.notes)
 
+        self._print_sep()
+
+
+    def _print_sep(self):
+        temp_level = self._current_level
+        self._current_level = 0
+        self._print(self.SEP)
+
+        self._current_level = temp_level
+
     def _print_media(self, media):
         self._print("Media:")
         self._current_level += 1
-        for index, media_element in enumerate(media):
+        for index, media_element in enumerate(media, 1):
             self._print("Element #{}".format(index))
 
             self._current_level += .5
@@ -579,23 +682,41 @@ class Printer:
             self._print("Remote path: {}".format(media_element.remote_path))
             self._print("Archive path: {}".format(media_element.arc_path))
             self._print("Local path: {}".format(media_element.local_path))
+            self._print("Title: {}".format(media_element.title))
+            self._print("Caption: {}".format(media_element.caption))
 
             self._current_level -= .5
 
         self._current_level -= 1
 
 
-    def _print_pages(self, pages): #
-        for index, page in enumerate(pages):
-            self._print("Page #{}:".format(index))
-            self._with_inc_indent(self._print_page, (page,))
+    def _print_pages(self, pages):
+        index = 0
+        for index, page in enumerate(pages, 1):
+            self._print("Page #{} (id {}, {} in section):".format(
+                self._pages_so_far + index,
+                page.page_id,
+                index))
+            self._bodies.append("Page {}: {}".format(page.page_id,
+                                                     page.body))
 
+            self._with_inc_indent(self._print_page, (page,))
+        self._pages_so_far += index
 
     def print_sections(self, sections):
-        for index, section in enumerate(sections):
+        for index, section in enumerate(sections, 1):
             self._print("Section #{}, title: {}".format(index, section.title))
             self._print("Pages: ")
             self._with_inc_indent(self._print_pages, (section.pages,))
+
+    def write_body(self, out_path):
+        body_el_sep = "\n{}\n".format(self.SEP)
+        if self._bodies:
+            with open(out_path, "w") as f:
+                f.write(body_el_sep.join([self._fix_unicode(s) for s in
+                                          self._bodies]))
+        else:
+            raise BadArgumentsError
 
 
 # @easylogger.log_at(new_level=logging.ERROR)
@@ -638,7 +759,10 @@ def main():
     sections = section_builder.for_tour(tour_id)
     printer = Printer()
     print("CONTENT FOR TOUR ID {}".format(tour_id))
+    print("MODULE TITLE: {}".format(db.tour_to_module_title(tour_id)))
+    print("TOUR TITLE: {}".format(db.tour_to_tour_title(tour_id)))
     printer.print_sections(sections)
+    printer.write_body("summary-tour-{}.txt".format(tour_id))
 
 
     return sections
