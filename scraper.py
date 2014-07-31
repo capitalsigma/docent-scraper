@@ -11,9 +11,10 @@ import os
 import gzip
 import shutil
 import glob
+import traceback
 
 from mysql import connector
-from sys import argv
+from sys import argv, stdout
 
 import easylogger
 import config
@@ -433,8 +434,8 @@ class MediaBuilder(DBBuilder):
         image_dirs, arc_media_paths, \
             other_media_paths = self._process_media(media_infos)
 
-        LOG.debug("got image dirs: ", image_dirs)
-        LOG.debug("got arc media paths: ", arc_media_paths)
+        image_dirs and LOG.debug("got image dirs: ", image_dirs)
+        arc_media_paths and LOG.debug("got arc media paths: ", arc_media_paths)
 
         for image_dir, arc_media_path in zip(image_dirs, arc_media_paths):
             LOG.debug("processing image_dir:", image_dir, "and arc_media_path:",
@@ -453,7 +454,9 @@ class MediaBuilder(DBBuilder):
             media_item.media_type = "other"
 
             media.append(media_item)
-        LOG.debug("built media: ", media)
+
+        media and LOG.debug("built media: ", media)
+
         for media_item in media:
             local_path = self._downloader.get(media_item.arc_path,
                                               section_id,
@@ -476,7 +479,9 @@ class MediaBuilder(DBBuilder):
         LOG.debug("with infos_to_ids: ", infos_to_ids)
 
         try:
-            short_image_dir = image_dir.split("/")[-1]
+            short_image_dir = image_dir.strip("/").split("/")[-1]
+
+            LOG.debug("Got short_image_dir: ", short_image_dir)
 
             media_id = [value for key, value in infos_to_ids.items()
                         if short_image_dir in key][0]
@@ -514,7 +519,7 @@ class MediaBuilder(DBBuilder):
         arc_image_paths = set()
         other_media_paths = set()
 
-        LOG.debug("got media_infos: ", media_infos)
+        media_infos and LOG.debug("got media_infos: ", media_infos)
 
         for file_type, file_name, file_path in media_infos:
             media_dir = self.BASE_MEDIA_DIR.format(file_path)
@@ -543,12 +548,12 @@ class PageBuilder(DBBuilder):
             page.body = self._db.page_to_body_text(page_id)
 
             media_infos_and_ids = self._db.page_to_media_info(page_id)
-            LOG.debug("Got media_infos_and_ids:", media_infos_and_ids)
+            media_infos_and_ids and LOG.debug("Got media_infos_and_ids:", media_infos_and_ids)
 
             media_infos_to_ids = {"".join(infos): page_id for
                                   infos, page_id in media_infos_and_ids}
 
-            LOG.debug("Got media_infos_to_ids:", media_infos_to_ids)
+            media_infos_to_ids and LOG.debug("Got media_infos_to_ids:", media_infos_to_ids)
 
             file_infos = [x[0] for x in media_infos_and_ids]
             # image_dir, arc_image_dir, \
@@ -660,13 +665,15 @@ class Printer:
         self._print_media(page.media)
         self._print_notes(page.notes)
 
-        self._print_sep()
 
-
-    def _print_sep(self):
+    def _print_sep(self, multiplier=1):
         temp_level = self._current_level
+        sep_to_print = self.SEP * multiplier #+ str(traceback.format_stack())
         self._current_level = 0
-        self._print(self.SEP)
+        self._print(sep_to_print)
+
+        self._bodies.append(sep_to_print)
+        # traceback.print_stack(file=stdout)
 
         self._current_level = temp_level
 
@@ -701,16 +708,23 @@ class Printer:
                                                      page.body))
 
             self._with_inc_indent(self._print_page, (page,))
+
+            self._print_sep()
+
         self._pages_so_far += index
 
     def print_sections(self, sections):
         for index, section in enumerate(sections, 1):
-            self._print("Section #{}, title: {}".format(index, section.title))
+            section_title_str = "Section #{}, title: {}".format(index, section.title)
+            self._print(section_title_str)
+            self._bodies.append(section_title_str)
+
+            self._print_sep(2)
             self._print("Pages: ")
             self._with_inc_indent(self._print_pages, (section.pages,))
 
     def write_body(self, out_path):
-        body_el_sep = "\n{}\n".format(self.SEP)
+        body_el_sep = "\n"
         if self._bodies:
             with open(out_path, "w") as f:
                 f.write(body_el_sep.join([self._fix_unicode(s) for s in
