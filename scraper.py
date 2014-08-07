@@ -696,7 +696,6 @@ class Printer:
 
         self._current_level -= 1
 
-
     def _print_pages(self, pages):
         index = 0
         for index, page in enumerate(pages, 1):
@@ -712,6 +711,10 @@ class Printer:
             self._print_sep()
 
         self._pages_so_far += index
+
+    def print_summary(self, summary_text):
+        self._print(summary_text)
+        self._bodies.append(summary_text)
 
     def print_sections(self, sections):
         for index, section in enumerate(sections, 1):
@@ -741,7 +744,7 @@ def main():
         dest="imagefiles",
         action="store",
         default="no",
-        help="specify download behavior (default: do not download)")
+        help="specify download behavior (Yes, No, or Local. Default: do not download)")
     arg_parser.add_argument(
         "tour_id",
         metavar="tour id",
@@ -772,9 +775,12 @@ def main():
 
     sections = section_builder.for_tour(tour_id)
     printer = Printer()
-    print("CONTENT FOR TOUR ID {}".format(tour_id))
-    print("MODULE TITLE: {}".format(db.tour_to_module_title(tour_id)))
-    print("TOUR TITLE: {}".format(db.tour_to_tour_title(tour_id)))
+    tour_summary = "CONTENT FOR TOUR ID {}".format(tour_id)
+    module_summary = "MODULE TITLE: {}".format(db.tour_to_module_title(tour_id))
+    title_summary = "TOUR TITLE: {}".format(db.tour_to_tour_title(tour_id))
+    summary_text = "\n".join([tour_summary, module_summary, title_summary])
+
+    printer.print_summary(summary_text)
     printer.print_sections(sections)
     printer.write_body("summary-tour-{}.txt".format(tour_id))
 
