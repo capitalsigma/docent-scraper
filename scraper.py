@@ -21,7 +21,7 @@ import config
 
 # LOG = easylogger.LOG
 LOG = easylogger.EasyLogger()
-LOG.setLevel(logging.DEBUG)
+LOG.setLevel(logging.INFO)
 
 class SCPError(Exception):
     pass
