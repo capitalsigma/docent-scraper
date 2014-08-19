@@ -26,7 +26,6 @@ LOG.setLevel(logging.DEBUG)
 class SCPError(Exception):
     pass
 
-
 class LocalFileError(SCPError):
     pass
 
@@ -114,8 +113,13 @@ class SCPGetter(AbstractGetter):
 
 class LocalGetter(AbstractGetter):
     def _get(self, remote, local):
+        got_something = False
         for f in glob.glob(remote):
+            got_something = True
             shutil.copy(f, local)
+
+        if not got_something:
+            raise IOError()
         # return gzip.open(local)
 
 class AbstractDownloader:
@@ -170,7 +174,7 @@ class RealDownloader(AbstractDownloader):
 
             return unzipped_path
 
-        except subprocess.CalledProcessError as err:
+        except (subprocess.CalledProcessError, IOError) as err:
             LOG.error("Something went wrong trying to download the image",
                       remote, ". Skipping.")
 
