@@ -21,7 +21,7 @@ import config
 
 # LOG = easylogger.LOG
 LOG = easylogger.EasyLogger()
-LOG.setLevel(logging.INFO)
+LOG.setLevel(logging.DEBUG)
 
 class SCPError(Exception):
     pass
@@ -466,10 +466,13 @@ class MediaBuilder(DBBuilder):
 
         return media
 
+    def _fix_arc_media_path(self, arc_media_path):
+        return arc_media_path.replace(".tiff.gz", ".tif.gz")
+
     def _build_image(self, image_dir, arc_media_path, infos_to_ids, page_id):
         media_item = Media()
         media_item.remote_path = image_dir
-        media_item.arc_path = arc_media_path
+        media_item.arc_path = self._fix_arc_media_path(arc_media_path)
         media_item.media_type = "image"
 
         title = None
@@ -490,8 +493,6 @@ class MediaBuilder(DBBuilder):
 
             title, caption = self._db.media_id_to_title_and_caption(
                 media_id, page_id)
-
-
 
         except (ValueError, IndexError) as e:
         # except BadArgumentsError as e:
