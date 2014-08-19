@@ -777,13 +777,15 @@ def main():
     section_builder = SectionBuilder(db, page_builder)
 
 
-
-    sections = section_builder.for_tour(tour_id)
-    printer = Printer()
-    tour_summary = "CONTENT FOR TOUR ID {}".format(tour_id)
-    module_summary = "MODULE TITLE: {}".format(db.tour_to_module_title(tour_id))
-    title_summary = "TOUR TITLE: {}".format(db.tour_to_tour_title(tour_id))
-    summary_text = "\n".join([tour_summary, module_summary, title_summary])
+    try:
+        sections = section_builder.for_tour(tour_id)
+        printer = Printer()
+        tour_summary = "CONTENT FOR TOUR ID {}".format(tour_id)
+        module_summary = "MODULE TITLE: {}".format(db.tour_to_module_title(tour_id))
+        title_summary = "TOUR TITLE: {}".format(db.tour_to_tour_title(tour_id))
+        summary_text = "\n".join([tour_summary, module_summary, title_summary])
+    except IndexError:
+        return
 
     printer.print_summary(summary_text)
     printer.print_sections(sections)
